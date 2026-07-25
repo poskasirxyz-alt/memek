@@ -1,0 +1,1622 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aplikasi Kasir Gratis No.1 Di Indonesia! by.Logis Denis Prabowo</title>
+    <meta name="description" content="Website kasir gratis, aplikasi kasir gratis, catatan penjualan, kasir, kasir gratis untuk UMKM">
+    <meta name="keywords" content="website kasir gratis, aplikasi kasir gratis, catatan penjualan, kasir, kasir gratis untuk UMKM">
+    <link rel="icon" type="image/png" href="https://cdn.photourl.com/member/2026-07-25-eece92fb-3ffe-4ec2-8cba-0e07b35433a7.png">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts: Inter & Courier Prime for Thermal Print -->
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Firebase 9.22.2 Compat Libraries -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+
+    <!-- React 18 & Babel CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- jsPDF & AutoTable for PDF Reports -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+    <!-- Chart.js for Sales Analytics -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Styles specifically for 80mm Thermal Receipt Printing */
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #thermal-print-area, #thermal-print-area * {
+                visibility: visible;
+            }
+            #thermal-print-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 80mm !important;
+                margin: 0 auto;
+                padding: 5px;
+                font-family: 'Courier Prime', monospace !important;
+                font-size: 12px;
+                line-height: 1.2;
+                color: #000 !important;
+                background: #fff !important;
+            }
+            @page {
+                size: 80mm auto;
+                margin: 0;
+            }
+        }
+        .thermal-font {
+            font-family: 'Courier Prime', monospace;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 transition-colors duration-200">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBxDpHQjTgT0PKBmNoZExaNx7uKf9v7_-U",
+            authDomain: "poskasir00.firebaseapp.com",
+            projectId: "poskasir00",
+            storageBucket: "poskasir00.firebasestorage.app",
+            messagingSenderId: "909305142592",
+            appId: "1:909305142592:web:aaf8c404ef7b6965d6eea5"
+        };
+
+        // Initialize Firebase
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        const LOGO_URL = "https://cdn.photourl.com/member/2026-07-25-eece92fb-3ffe-4ec2-8cba-0e07b35433a7.png";
+        const FALLBACK_LOGO = "https://placehold.co/120x120/0284c7/ffffff?text=POS";
+
+        // Format Currency Helper
+        const formatRupiah = (number) => {
+            return new Intl.NumberFormat('id-ID', {
+                style: 'currency',
+                currency: 'IDR',
+                maximumFractionDigits: 0
+            }).format(number || 0);
+        };
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [activeTab, setActiveTab] = useState('kasir'); // kasir, produk, riwayat, rekap, pengaturan
+            const [permissionError, setPermissionError] = useState(false);
+            const [darkMode, setDarkMode] = useState(() => {
+                return localStorage.getItem('poskasir_theme') === 'dark';
+            });
+            const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+            // Store Settings State
+            const [storeSettings, setStoreSettings] = useState({
+                name: 'Toko UMKM Berkah',
+                address: 'Jl. Raya Merdeka No. 88, Cirebon',
+                phone: '0812-3456-7890'
+            });
+
+            // Active Transaction for Thermal Receipt Modal
+            const [activeReceipt, setActiveReceipt] = useState(null);
+            const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+
+            // Apply Dark Mode Class
+            useEffect(() => {
+                if (darkMode) {
+                    document.documentElement.classList.add('dark');
+                    localStorage.setItem('poskasir_theme', 'dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                    localStorage.setItem('poskasir_theme', 'light');
+                }
+            }, [darkMode]);
+
+            // Authentication Listener
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+                    setUser(currentUser);
+                    setLoading(false);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // Fetch Store Settings on Auth Change
+            useEffect(() => {
+                if (!user) return;
+                const unsubscribe = db.collection('users').doc(user.uid).collection('settings').doc('store')
+                    .onSnapshot((doc) => {
+                        if (doc.exists) {
+                            setStoreSettings(doc.data());
+                            setPermissionError(false);
+                        } else {
+                            // Save default settings if doc does not exist
+                            db.collection('users').doc(user.uid).collection('settings').doc('store').set({
+                                name: 'Toko UMKM Berkah',
+                                address: 'Jl. Utama No. 123, Cirebon',
+                                phone: '0812-3456-7890'
+                            }).then(() => setPermissionError(false))
+                            .catch(err => {
+                                console.warn("Failed to initialize store settings:", err);
+                                setPermissionError(true);
+                            });
+                        }
+                    }, (err) => {
+                        console.error("Error fetching store settings:", err);
+                        if (err.code === 'permission-denied' || err.message.includes('permissions')) {
+                            setPermissionError(true);
+                        }
+                    });
+                return () => unsubscribe();
+            }, [user]);
+
+            const handleLogout = () => {
+                auth.signOut();
+            };
+
+            const triggerReceiptModal = (transactionData) => {
+                setActiveReceipt(transactionData);
+                setIsReceiptModalOpen(true);
+            };
+
+            if (loading) {
+                return (
+                    <div class="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white">
+                        <div class="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                        <p class="text-lg font-medium tracking-wide">Memuat POSKASIR.XYZ...</p>
+                    </div>
+                );
+            }
+
+            if (!user) {
+                return <AuthPage logoUrl={LOGO_URL} fallbackLogo={FALLBACK_LOGO} />;
+            }
+
+            return (
+                <div class="flex h-screen overflow-hidden bg-slate-100 dark:bg-slate-900">
+                    {/* Sidebar for Desktop */}
+                    <Sidebar 
+                        activeTab={activeTab} 
+                        setActiveTab={setActiveTab} 
+                        user={user} 
+                        onLogout={handleLogout}
+                        darkMode={darkMode}
+                        setDarkMode={setDarkMode}
+                        logoUrl={LOGO_URL}
+                        fallbackLogo={FALLBACK_LOGO}
+                        mobileSidebarOpen={mobileSidebarOpen}
+                        setMobileSidebarOpen={setMobileSidebarOpen}
+                    />
+
+                    {/* Main Content Area */}
+                    <div class="flex-1 flex flex-col h-full overflow-hidden">
+                        {/* Top Navbar */}
+                        <header class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-4 py-3 flex items-center justify-between z-10 shadow-sm">
+                            <div class="flex items-center space-x-3">
+                                <button 
+                                    onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)} 
+                                    class="lg:hidden p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg focus:outline-none"
+                                >
+                                    <i class="fa-solid fa-bars text-xl"></i>
+                                </button>
+                                <h1 class="text-xl font-bold text-slate-800 dark:text-white capitalize flex items-center gap-2">
+                                    {activeTab === 'kasir' && <><i class="fa-solid fa-cash-register text-sky-600"></i> Kasir Penjualan</>}
+                                    {activeTab === 'produk' && <><i class="fa-solid fa-boxes-stacked text-sky-600"></i> Manajemen Produk</>}
+                                    {activeTab === 'riwayat' && <><i class="fa-solid fa-receipt text-sky-600"></i> Riwayat Transaksi</>}
+                                    {activeTab === 'rekap' && <><i class="fa-solid fa-chart-line text-sky-600"></i> Rekap Pendapatan</>}
+                                    {activeTab === 'pengaturan' && <><i class="fa-solid fa-gear text-sky-600"></i> Pengaturan Toko</>}
+                                </h1>
+                            </div>
+
+                            <div class="flex items-center space-x-3">
+                                <div class="hidden sm:flex flex-col text-right">
+                                    <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">{storeSettings.name}</span>
+                                    <span class="text-xs text-slate-500 dark:text-slate-400">{user.email}</span>
+                                </div>
+                                <div class="w-9 h-9 rounded-full bg-sky-600 text-white flex items-center justify-center font-bold text-sm shadow">
+                                    {user.email ? user.email.charAt(0).toUpperCase() : 'U'}
+                                </div>
+                            </div>
+                        </header>
+
+                        {/* Dynamic Main View */}
+                        <main class="flex-1 overflow-y-auto p-4 md:p-6">
+                            {permissionError && <PermissionAlertBanner />}
+                            {activeTab === 'kasir' && (
+                                <KasirTab user={user} storeSettings={storeSettings} onTransactionComplete={triggerReceiptModal} setPermissionError={setPermissionError} />
+                            )}
+                            {activeTab === 'produk' && (
+                                <ProdukTab user={user} setPermissionError={setPermissionError} />
+                            )}
+                            {activeTab === 'riwayat' && (
+                                <RiwayatTab user={user} storeSettings={storeSettings} onOpenReceipt={triggerReceiptModal} setPermissionError={setPermissionError} />
+                            )}
+                            {activeTab === 'rekap' && (
+                                <RekapTab user={user} setPermissionError={setPermissionError} />
+                            )}
+                            {activeTab === 'pengaturan' && (
+                                <PengaturanTab user={user} storeSettings={storeSettings} setStoreSettings={setStoreSettings} darkMode={darkMode} setDarkMode={setDarkMode} setPermissionError={setPermissionError} />
+                            )}
+                        </main>
+
+                        {/* Footer */}
+                        <footer class="bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 px-4 py-2 text-center text-xs text-slate-500 dark:text-slate-400">
+                            Website ini dibuat oleh <strong class="text-slate-700 dark:text-slate-200">Logis Denis Prabowo</strong> © 2026 POSKASIR.XYZ
+                        </footer>
+                    </div>
+
+                    {/* Struk Thermal Printable Modal */}
+                    {isReceiptModalOpen && activeReceipt && (
+                        <StrukModal 
+                            transaction={activeReceipt} 
+                            storeSettings={storeSettings} 
+                            user={user} 
+                            onClose={() => setIsReceiptModalOpen(false)} 
+                        />
+                    )}
+                </div>
+            );
+        }
+
+        function PermissionAlertBanner() {
+            const rulesSnippet = `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /users/{userId}/{document=**} {\n      allow read, write: if request.auth != null && request.auth.uid == userId;\n    }\n  }\n}`;
+            const [copied, setCopied] = useState(false);
+
+            const handleCopy = () => {
+                const input = document.createElement('textarea');
+                input.value = rulesSnippet;
+                document.body.appendChild(input);
+                input.select();
+                document.execCommand('copy');
+                document.body.removeChild(input);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            };
+
+            return (
+                <div class="mb-4 p-4 bg-amber-500/10 border-l-4 border-amber-500 rounded-r-xl text-amber-800 dark:text-amber-200 text-xs shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                    <div class="flex items-start gap-3">
+                        <i class="fa-solid fa-triangle-exclamation text-amber-500 text-lg mt-0.5"></i>
+                        <div>
+                            <h4 class="font-bold text-sm text-amber-900 dark:text-amber-100">Izin Database Firestore Diperlukan</h4>
+                            <p class="mt-0.5 text-slate-600 dark:text-slate-300">
+                                Jika data tidak muncul atau gagal disimpan, pastikan Aturan Keamanan (**Rules**) di Firebase Console sudah di-publish:
+                            </p>
+                            <pre class="mt-2 p-2 bg-slate-900 text-amber-300 font-mono text-[11px] rounded-lg overflow-x-auto select-all">
+                                {rulesSnippet}
+                            </pre>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 self-end md:self-center flex-shrink-0">
+                        <button onClick={handleCopy} class="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg font-bold transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-copy"></i> {copied ? 'Tersalin!' : 'Salin Rule'}
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        function AuthPage({ logoUrl, fallbackLogo }) {
+            const [isRegister, setIsRegister] = useState(false);
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [errorMessage, setErrorMessage] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setErrorMessage('');
+
+                if (password.length < 6) {
+                    setErrorMessage('Password minimal harus 6 karakter!');
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    if (isRegister) {
+                        await auth.createUserWithEmailAndPassword(email, password);
+                    } else {
+                        await auth.signInWithEmailAndPassword(email, password);
+                    }
+                } catch (err) {
+                    console.error("Auth error:", err);
+                    if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+                        setErrorMessage('Email atau Password salah!');
+                    } else if (err.code === 'auth/email-already-in-use') {
+                        setErrorMessage('Email ini sudah terdaftar. Silakan login.');
+                    } else if (err.code === 'auth/invalid-email') {
+                        setErrorMessage('Format email tidak valid.');
+                    } else {
+                        setErrorMessage(err.message || 'Gagal masuk ke sistem.');
+                    }
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div class="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
+                    {/* Background Decorative Glow */}
+                    <div class="absolute -top-40 -left-40 w-96 h-96 bg-sky-500/20 rounded-full blur-3xl"></div>
+                    <div class="absolute -bottom-40 -right-40 w-96 h-96 bg-indigo-500/20 rounded-full blur-3xl"></div>
+
+                    <div class="w-full max-w-md bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-6 sm:p-8 relative z-10">
+                        <div class="text-center mb-8">
+                            <img 
+                                src={logoUrl} 
+                                onError={(e) => { e.target.onerror = null; e.target.src = fallbackLogo; }} 
+                                alt="POSKASIR.XYZ Logo" 
+                                class="w-20 h-20 mx-auto mb-3 object-contain rounded-2xl bg-slate-700/50 p-2 shadow-inner"
+                            />
+                            <h2 class="text-2xl font-black text-white tracking-tight">POSKASIR<span class="text-sky-500">.XYZ</span></h2>
+                            <p class="text-slate-400 text-xs mt-1">Aplikasi Kasir Gratis No.1 Di Indonesia!</p>
+                        </div>
+
+                        {/* Toggle Tab */}
+                        <div class="flex bg-slate-900/60 p-1 rounded-xl mb-6 border border-slate-700">
+                            <button 
+                                type="button"
+                                onClick={() => { setIsRegister(false); setErrorMessage(''); }} 
+                                class={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${!isRegister ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                Masuk (Login)
+                            </button>
+                            <button 
+                                type="button"
+                                onClick={() => { setIsRegister(true); setErrorMessage(''); }} 
+                                class={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${isRegister ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                Daftar Akun
+                            </button>
+                        </div>
+
+                        {errorMessage && (
+                            <div class="mb-4 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-xs flex items-center gap-2">
+                                <i class="fa-solid fa-circle-exclamation text-base"></i>
+                                <span>{errorMessage}</span>
+                            </div>
+                        )}
+
+                        <form onSubmit={handleSubmit} class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-300 mb-1.5">Alamat Email</label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500">
+                                        <i class="fa-solid fa-envelope"></i>
+                                    </span>
+                                    <input 
+                                        type="email" 
+                                        required 
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        placeholder="nama@toko.com" 
+                                        class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500 transition"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-300 mb-1.5">Password (Min. 6 Karakter)</label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500">
+                                        <i class="fa-solid fa-lock"></i>
+                                    </span>
+                                    <input 
+                                        type="password" 
+                                        required 
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        placeholder="••••••••" 
+                                        class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:border-sky-500 transition"
+                                    />
+                                </div>
+                            </div>
+
+                            <button 
+                                type="submit" 
+                                disabled={loading}
+                                class="w-full py-3 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow-lg hover:shadow-sky-500/25 transition duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                                {loading ? (
+                                    <>
+                                        <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                        <span>Memproses...</span>
+                                    </>
+                                ) : (
+                                    <span>{isRegister ? 'Buat Akun Sekarang' : 'Masuk ke Kasir'}</span>
+                                )}
+                            </button>
+                        </form>
+
+                        <div class="mt-8 pt-4 border-t border-slate-700/50 text-center text-xs text-slate-500">
+                            Website ini dibuat oleh <br/><strong class="text-slate-300">Logis Denis Prabowo © 2026</strong>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function Sidebar({ activeTab, setActiveTab, user, onLogout, darkMode, setDarkMode, logoUrl, fallbackLogo, mobileSidebarOpen, setMobileSidebarOpen }) {
+            const menuItems = [
+                { id: 'kasir', label: 'Kasir', icon: 'fa-cash-register' },
+                { id: 'produk', label: 'Manajemen Produk', icon: 'fa-boxes-stacked' },
+                { id: 'riwayat', label: 'Riwayat Transaksi', icon: 'fa-receipt' },
+                { id: 'rekap', label: 'Rekap Pendapatan', icon: 'fa-chart-line' },
+                { id: 'pengaturan', label: 'Pengaturan', icon: 'fa-gear' },
+            ];
+
+            return (
+                <>
+                    {/* Overlay for mobile view */}
+                    {mobileSidebarOpen && (
+                        <div 
+                            onClick={() => setMobileSidebarOpen(false)} 
+                            class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-20 lg:hidden"
+                        ></div>
+                    )}
+
+                    <aside class={`
+                        fixed lg:static inset-y-0 left-0 z-30
+                        w-64 bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700
+                        flex flex-col justify-between transition-transform duration-300 transform
+                        ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+                    `}>
+                        <div>
+                            {/* Logo Header */}
+                            <div class="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center gap-3">
+                                <img 
+                                    src={logoUrl} 
+                                    onError={(e) => { e.target.onerror = null; e.target.src = fallbackLogo; }}
+                                    alt="Logo POSKASIR" 
+                                    class="w-10 h-10 object-contain rounded-xl bg-slate-100 dark:bg-slate-700 p-1"
+                                />
+                                <div>
+                                    <h2 class="font-black text-lg leading-none text-slate-800 dark:text-white">POSKASIR<span class="text-sky-600">.XYZ</span></h2>
+                                    <span class="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Free UMKM POS</span>
+                                </div>
+                            </div>
+
+                            {/* Navigation Items */}
+                            <nav class="p-3 space-y-1">
+                                {menuItems.map((item) => {
+                                    const isActive = activeTab === item.id;
+                                    return (
+                                        <button
+                                            key={item.id}
+                                            onClick={() => {
+                                                setActiveTab(item.id);
+                                                setMobileSidebarOpen(false);
+                                            }}
+                                            class={`
+                                                w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all
+                                                ${isActive 
+                                                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/20' 
+                                                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/60'
+                                                }
+                                            `}
+                                        >
+                                            <i class={`fa-solid ${item.icon} w-5 text-center text-base`}></i>
+                                            <span>{item.label}</span>
+                                        </button>
+                                    );
+                                })}
+                            </nav>
+                        </div>
+
+                        {/* Bottom Actions: Dark Mode & Logout */}
+                        <div class="p-3 border-t border-slate-200 dark:border-slate-700 space-y-2">
+                            <button 
+                                onClick={() => setDarkMode(!darkMode)}
+                                class="w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+                            >
+                                <span class="flex items-center gap-2">
+                                    <i class={`fa-solid ${darkMode ? 'fa-moon text-sky-400' : 'fa-sun text-amber-500'}`}></i>
+                                    <span>{darkMode ? 'Mode Gelap' : 'Mode Terang'}</span>
+                                </span>
+                                <span class={`w-8 h-4 rounded-full p-0.5 transition-colors ${darkMode ? 'bg-sky-600' : 'bg-slate-300'}`}>
+                                    <span class={`block w-3 h-3 rounded-full bg-white transition-transform ${darkMode ? 'translate-x-4' : 'translate-x-0'}`}></span>
+                                </span>
+                            </button>
+
+                            <button 
+                                onClick={onLogout}
+                                class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition"
+                            >
+                                <i class="fa-solid fa-right-from-bracket w-5 text-center"></i>
+                                <span>Keluar Akun</span>
+                            </button>
+                        </div>
+                    </aside>
+                </>
+            );
+        }
+
+        function KasirTab({ user, storeSettings, onTransactionComplete, setPermissionError }) {
+            const [products, setProducts] = useState([]);
+            const [searchQuery, setSearchQuery] = useState('');
+            const [selectedCategory, setSelectedCategory] = useState('Semua');
+            const [cart, setCart] = useState([]);
+            const [taxEnabled, setTaxEnabled] = useState(true); // PPN 11%
+            const [paymentAmount, setPaymentAmount] = useState('');
+            const [loading, setLoading] = useState(true);
+
+            // Fetch Products from Firestore
+            useEffect(() => {
+                if (!user) return;
+                const unsubscribe = db.collection('users').doc(user.uid).collection('products')
+                    .onSnapshot((snapshot) => {
+                        const items = [];
+                        snapshot.forEach((doc) => {
+                            items.push({ id: doc.id, ...doc.data() });
+                        });
+                        setProducts(items);
+                        setLoading(false);
+                    }, (err) => {
+                        console.error("Firestore product fetch error:", err);
+                        if (err.code === 'permission-denied' || err.message.includes('permissions')) {
+                            if (setPermissionError) setPermissionError(true);
+                        }
+                        setLoading(false);
+                    });
+                return () => unsubscribe();
+            }, [user]);
+
+            // Filter Categories
+            const categories = ['Semua', ...new Set(products.map(p => p.category || 'Umum'))];
+
+            const filteredProducts = products.filter(product => {
+                const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase());
+                const matchesCategory = selectedCategory === 'Semua' || (product.category || 'Umum') === selectedCategory;
+                return matchesSearch && matchesCategory;
+            });
+
+            // Cart Calculations
+            const addToCart = (product) => {
+                if (product.stock <= 0) return;
+                setCart(prev => {
+                    const existingIndex = prev.findIndex(item => item.id === product.id);
+                    if (existingIndex > -1) {
+                        const currentQty = prev[existingIndex].qty;
+                        if (currentQty >= product.stock) return prev; // Limit to stock
+                        const updated = [...prev];
+                        updated[existingIndex].qty += 1;
+                        return updated;
+                    }
+                    return [...prev, { ...product, qty: 1 }];
+                });
+            };
+
+            const updateCartQty = (id, delta) => {
+                setCart(prev => {
+                    return prev.map(item => {
+                        if (item.id === id) {
+                            const newQty = item.qty + delta;
+                            const maxStock = item.stock || 9999;
+                            if (newQty <= 0) return null;
+                            if (newQty > maxStock) return item;
+                            return { ...item, qty: newQty };
+                        }
+                        return item;
+                    }).filter(Boolean);
+                });
+            };
+
+            const subtotal = cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
+            const tax = taxEnabled ? subtotal * 0.11 : 0;
+            const grandTotal = subtotal + tax;
+            const cashVal = parseFloat(paymentAmount) || 0;
+            const change = cashVal >= grandTotal ? cashVal - grandTotal : 0;
+
+            // Handle Checkout
+            const handleCheckout = async () => {
+                if (cart.length === 0) return;
+                if (cashVal < grandTotal) {
+                    alert('Nominal pembayaran tunai kurang dari total belanja!');
+                    return;
+                }
+
+                try {
+                    const transactionRef = db.collection('users').doc(user.uid).collection('transactions').doc();
+                    const transactionData = {
+                        id: transactionRef.id,
+                        transactionNo: 'TRX-' + Date.now().toString().slice(-8),
+                        date: firebase.firestore.FieldValue.serverTimestamp(),
+                        dateFormatted: new Date().toLocaleString('id-ID'),
+                        items: cart.map(item => ({
+                            id: item.id,
+                            name: item.name,
+                            price: item.price,
+                            qty: item.qty,
+                            total: item.price * item.qty
+                        })),
+                        subtotal: subtotal,
+                        tax: tax,
+                        grandTotal: grandTotal,
+                        cash: cashVal,
+                        change: change
+                    };
+
+                    await transactionRef.set(transactionData);
+
+                    // Update product stocks in batch
+                    const batch = db.batch();
+                    cart.forEach(item => {
+                        const productRef = db.collection('users').doc(user.uid).collection('products').doc(item.id);
+                        batch.update(productRef, {
+                            stock: firebase.firestore.FieldValue.increment(-item.qty)
+                        });
+                    });
+                    await batch.commit();
+
+                    // Reset Cart
+                    setCart([]);
+                    setPaymentAmount('');
+
+                    // Show Receipt
+                    onTransactionComplete(transactionData);
+                } catch (err) {
+                    console.error("Error during checkout:", err);
+                    alert("Gagal memproses transaksi: " + err.message);
+                }
+            };
+
+            return (
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
+                    {/* Left side: Product Catalog */}
+                    <div class="lg:col-span-7 xl:col-span-8 flex flex-col space-y-4">
+                        {/* Search & Filter Header */}
+                        <div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 flex flex-col md:flex-row gap-3">
+                            <div class="relative flex-1">
+                                <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+                                    <i class="fa-solid fa-magnifying-glass"></i>
+                                </span>
+                                <input 
+                                    type="text" 
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    placeholder="Cari nama produk..." 
+                                    class="w-full pl-9 pr-4 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:border-sky-500 dark:text-white"
+                                />
+                            </div>
+
+                            {/* Category Badges */}
+                            <div class="flex gap-1.5 overflow-x-auto pb-1 md:pb-0 no-scrollbar">
+                                {categories.map(cat => (
+                                    <button
+                                        key={cat}
+                                        onClick={() => setSelectedCategory(cat)}
+                                        class={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+                                            selectedCategory === cat
+                                                ? 'bg-sky-600 text-white'
+                                                : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                                        }`}
+                                    >
+                                        {cat}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Product Grid */}
+                        <div class="flex-1 overflow-y-auto pr-1">
+                            {loading ? (
+                                <div class="text-center py-12 text-slate-400">Memuat katalog produk...</div>
+                            ) : filteredProducts.length === 0 ? (
+                                <div class="text-center py-12 bg-white dark:bg-slate-800 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
+                                    <i class="fa-solid fa-box-open text-4xl text-slate-300 dark:text-slate-600 mb-2"></i>
+                                    <p class="text-slate-500 dark:text-slate-400 text-sm">Tidak ada produk ditemukan.</p>
+                                    <p class="text-xs text-slate-400 mt-1">Tambahkan produk di menu **Manajemen Produk**.</p>
+                                </div>
+                            ) : (
+                                <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+                                    {filteredProducts.map(product => {
+                                        const isOutOfStock = product.stock <= 0;
+                                        return (
+                                            <div 
+                                                key={product.id}
+                                                onClick={() => !isOutOfStock && addToCart(product)}
+                                                class={`
+                                                    bg-white dark:bg-slate-800 border rounded-2xl p-3 flex flex-col justify-between transition-all duration-200 select-none cursor-pointer group
+                                                    ${isOutOfStock ? 'opacity-50 border-slate-200 dark:border-slate-700 cursor-not-allowed' : 'hover:border-sky-500 hover:shadow-md border-slate-200 dark:border-slate-700'}
+                                                `}
+                                            >
+                                                <div>
+                                                    <div class="relative w-full h-24 mb-2 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-900">
+                                                        <img 
+                                                            src={product.image || 'https://placehold.co/200x200/e2e8f0/475569?text=Produk'} 
+                                                            alt={product.name} 
+                                                            class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                                            onError={(e) => { e.target.src = 'https://placehold.co/200x200/e2e8f0/475569?text=Produk'; }}
+                                                        />
+                                                        <span class={`absolute top-1 right-1 px-2 py-0.5 text-[10px] font-bold rounded-lg ${isOutOfStock ? 'bg-rose-500 text-white' : 'bg-slate-900/70 text-white'}`}>
+                                                            Stok: {product.stock}
+                                                        </span>
+                                                    </div>
+                                                    <h3 class="font-bold text-xs text-slate-800 dark:text-white line-clamp-2 leading-snug">{product.name}</h3>
+                                                </div>
+                                                <div class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/60 flex items-center justify-between">
+                                                    <span class="text-xs font-black text-sky-600 dark:text-sky-400">{formatRupiah(product.price)}</span>
+                                                    <button class="w-6 h-6 rounded-lg bg-sky-50 dark:bg-sky-900/40 text-sky-600 dark:text-sky-300 flex items-center justify-center text-xs font-bold group-hover:bg-sky-600 group-hover:text-white transition">
+                                                        <i class="fa-solid fa-plus"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Right side: Cart & Checkout */}
+                    <div class="lg:col-span-5 xl:col-span-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 flex flex-col justify-between shadow-sm">
+                        <div>
+                            <div class="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3 mb-3">
+                                <h2 class="font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                                    <i class="fa-solid fa-cart-shopping text-sky-600"></i> Keranjang Penjualan
+                                </h2>
+                                {cart.length > 0 && (
+                                    <button onClick={() => setCart([])} class="text-xs text-rose-500 hover:underline">
+                                        Kosongkan
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Cart List */}
+                            <div class="max-h-64 overflow-y-auto space-y-2 pr-1">
+                                {cart.length === 0 ? (
+                                    <div class="text-center py-8 text-slate-400 text-xs">
+                                        Belum ada item di keranjang. Klik produk di sebelah kiri.
+                                    </div>
+                                ) : (
+                                    cart.map(item => (
+                                        <div key={item.id} class="flex items-center justify-between bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl text-xs">
+                                            <div class="flex-1 pr-2">
+                                                <h4 class="font-semibold text-slate-800 dark:text-white truncate">{item.name}</h4>
+                                                <div class="text-slate-500 dark:text-slate-400 text-[11px] mt-0.5">
+                                                    {formatRupiah(item.price)} x {item.qty} = <span class="font-bold text-slate-700 dark:text-slate-200">{formatRupiah(item.price * item.qty)}</span>
+                                                </div>
+                                            </div>
+                                            <div class="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5">
+                                                <button onClick={() => updateCartQty(item.id, -1)} class="w-6 h-6 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">
+                                                    <i class="fa-solid fa-minus text-[10px]"></i>
+                                                </button>
+                                                <span class="w-6 text-center font-bold text-slate-800 dark:text-white">{item.qty}</span>
+                                                <button onClick={() => updateCartQty(item.id, 1)} class="w-6 h-6 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded">
+                                                    <i class="fa-solid fa-plus text-[10px]"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Payment Calculations */}
+                        <div class="mt-4 pt-3 border-t border-slate-200 dark:border-slate-700 space-y-2">
+                            <div class="flex justify-between text-xs text-slate-600 dark:text-slate-400">
+                                <span>Subtotal</span>
+                                <span class="font-medium text-slate-800 dark:text-slate-200">{formatRupiah(subtotal)}</span>
+                            </div>
+
+                            <div class="flex justify-between items-center text-xs text-slate-600 dark:text-slate-400">
+                                <label class="flex items-center gap-2 cursor-pointer select-none">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={taxEnabled} 
+                                        onChange={(e) => setTaxEnabled(e.target.checked)} 
+                                        class="rounded text-sky-600 focus:ring-sky-500"
+                                    />
+                                    <span>PPN 11%</span>
+                                </label>
+                                <span class="font-medium text-slate-800 dark:text-slate-200">{formatRupiah(tax)}</span>
+                            </div>
+
+                            <div class="flex justify-between text-sm font-bold text-slate-900 dark:text-white pt-1 border-t border-slate-100 dark:border-slate-700">
+                                <span>Total Bayar</span>
+                                <span class="text-sky-600 dark:text-sky-400 text-base">{formatRupiah(grandTotal)}</span>
+                            </div>
+
+                            {/* Cash Input & Quick Nominal */}
+                            <div class="pt-2">
+                                <label class="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">Uang Tunai (Rp)</label>
+                                <input 
+                                    type="number" 
+                                    value={paymentAmount} 
+                                    onChange={(e) => setPaymentAmount(e.target.value)} 
+                                    placeholder="0" 
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                                />
+
+                                {/* Quick Money Buttons */}
+                                <div class="grid grid-cols-3 gap-1.5 mt-2">
+                                    {[grandTotal, 10000, 20000, 50000, 100000].map((amt, idx) => {
+                                        if (amt <= 0) return null;
+                                        return (
+                                            <button 
+                                                key={idx}
+                                                type="button" 
+                                                onClick={() => setPaymentAmount(amt.toString())}
+                                                class="px-2 py-1 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-[10px] font-semibold text-slate-700 dark:text-slate-200 rounded-lg truncate"
+                                            >
+                                                {amt === grandTotal ? 'Uang Pas' : formatRupiah(amt)}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div class="flex justify-between text-xs font-semibold pt-1">
+                                <span class="text-slate-500">Kembalian</span>
+                                <span class={`font-bold ${change < 0 ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                    {formatRupiah(change)}
+                                </span>
+                            </div>
+
+                            <button 
+                                onClick={handleCheckout} 
+                                disabled={cart.length === 0 || cashVal < grandTotal}
+                                class="w-full mt-3 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg transition duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <i class="fa-solid fa-print"></i>
+                                <span>Bayar & Cetak Struk</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ProdukTab({ user, setPermissionError }) {
+            const [products, setProducts] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [editingId, setEditingId] = useState(null);
+
+            const [formData, setFormData] = useState({
+                name: '',
+                price: '',
+                stock: '',
+                category: 'Makanan',
+                image: ''
+            });
+
+            useEffect(() => {
+                if (!user) return;
+                const unsubscribe = db.collection('users').doc(user.uid).collection('products')
+                    .onSnapshot((snapshot) => {
+                        const items = [];
+                        snapshot.forEach((doc) => {
+                            items.push({ id: doc.id, ...doc.data() });
+                        });
+                        setProducts(items);
+                        setLoading(false);
+                    }, (err) => {
+                        console.error("Fetch products error:", err);
+                        if (err.code === 'permission-denied' || err.message.includes('permissions')) {
+                            if (setPermissionError) setPermissionError(true);
+                        }
+                        setLoading(false);
+                    });
+                return () => unsubscribe();
+            }, [user]);
+
+            const handleSave = async (e) => {
+                e.preventDefault();
+                if (!formData.name || !formData.price) return;
+
+                const payload = {
+                    name: formData.name,
+                    price: parseFloat(formData.price) || 0,
+                    stock: parseInt(formData.stock) || 0,
+                    category: formData.category || 'Umum',
+                    image: formData.image || 'https://placehold.co/200x200/e2e8f0/475569?text=Produk'
+                };
+
+                try {
+                    if (editingId) {
+                        await db.collection('users').doc(user.uid).collection('products').doc(editingId).update(payload);
+                    } else {
+                        await db.collection('users').doc(user.uid).collection('products').add(payload);
+                    }
+                    setFormData({ name: '', price: '', stock: '', category: 'Makanan', image: '' });
+                    setEditingId(null);
+                } catch (err) {
+                    console.error("Error saving product:", err);
+                    alert("Gagal menyimpan produk: " + err.message);
+                }
+            };
+
+            const handleEdit = (product) => {
+                setEditingId(product.id);
+                setFormData({
+                    name: product.name,
+                    price: product.price.toString(),
+                    stock: product.stock.toString(),
+                    category: product.category,
+                    image: product.image
+                });
+            };
+
+            const handleDelete = async (id) => {
+                if (!window.confirm("Yakin ingin menghapus produk ini?")) return;
+                try {
+                    await db.collection('users').doc(user.uid).collection('products').doc(id).delete();
+                } catch (err) {
+                    console.error("Delete error:", err);
+                }
+            };
+
+            const addSampleProducts = async () => {
+                const samples = [
+                    { name: 'Kopi Susu Gula Aren', price: 18000, stock: 50, category: 'Minuman', image: 'https://images.unsplash.com/photo-1541167760496-1628856ab772?auto=format&fit=crop&w=300&q=80' },
+                    { name: 'Nasi Goreng Spesial', price: 25000, stock: 30, category: 'Makanan', image: 'https://images.unsplash.com/photo-1603133872878-684f208fb84b?auto=format&fit=crop&w=300&q=80' },
+                    { name: 'Es Teh Manis', price: 5000, stock: 100, category: 'Minuman', image: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?auto=format&fit=crop&w=300&q=80' },
+                    { name: 'Kentang Goreng Crisp', price: 15000, stock: 40, category: 'Snack', image: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=300&q=80' }
+                ];
+                const batch = db.batch();
+                samples.forEach(s => {
+                    const ref = db.collection('users').doc(user.uid).collection('products').doc();
+                    batch.set(ref, s);
+                });
+                await batch.commit();
+            };
+
+            return (
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* Left Form Column */}
+                    <div class="lg:col-span-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 shadow-sm h-fit">
+                        <h2 class="font-bold text-slate-800 dark:text-white mb-4 flex items-center justify-between">
+                            <span>{editingId ? 'Edit Produk' : 'Tambah Produk Baru'}</span>
+                            {editingId && (
+                                <button onClick={() => { setEditingId(null); setFormData({ name: '', price: '', stock: '', category: 'Makanan', image: '' }); }} class="text-xs text-rose-500 hover:underline">
+                                    Batal Edit
+                                </button>
+                            )}
+                        </h2>
+
+                        <form onSubmit={handleSave} class="space-y-3 text-xs">
+                            <div>
+                                <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">Nama Produk *</label>
+                                <input 
+                                    type="text" 
+                                    required
+                                    value={formData.name}
+                                    onChange={(e) => setFormData({...formData, name: e.target.value})}
+                                    placeholder="Contoh: Es Kopi Aren" 
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                                />
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">Harga (Rp) *</label>
+                                    <input 
+                                        type="number" 
+                                        required
+                                        value={formData.price}
+                                        onChange={(e) => setFormData({...formData, price: e.target.value})}
+                                        placeholder="15000" 
+                                        class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">Stok *</label>
+                                    <input 
+                                        type="number" 
+                                        required
+                                        value={formData.stock}
+                                        onChange={(e) => setFormData({...formData, stock: e.target.value})}
+                                        placeholder="50" 
+                                        class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">Kategori</label>
+                                <select 
+                                    value={formData.category}
+                                    onChange={(e) => setFormData({...formData, category: e.target.value})}
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                                >
+                                    <option value="Makanan">Makanan</option>
+                                    <option value="Minuman">Minuman</option>
+                                    <option value="Snack">Snack</option>
+                                    <option value="Pakaian">Pakaian</option>
+                                    <option value="Lainnya">Lainnya</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">URL Gambar (Opsional)</label>
+                                <input 
+                                    type="url" 
+                                    value={formData.image}
+                                    onChange={(e) => setFormData({...formData, image: e.target.value})}
+                                    placeholder="https://..." 
+                                    class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                                />
+                            </div>
+
+                            <button 
+                                type="submit"
+                                class="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow transition mt-2"
+                            >
+                                {editingId ? 'Simpan Perubahan' : '+ Tambah Produk'}
+                            </button>
+                        </form>
+                    </div>
+
+                    {/* Right Table Column */}
+                    <div class="lg:col-span-8 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 shadow-sm">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="font-bold text-slate-800 dark:text-white">Daftar Produk ({products.length})</h2>
+                            {products.length === 0 && (
+                                <button 
+                                    onClick={addSampleProducts}
+                                    class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow transition"
+                                >
+                                    + Masukkan Sample Produk
+                                </button>
+                            )}
+                        </div>
+
+                        {loading ? (
+                            <div class="text-center py-8 text-slate-400">Memuat...</div>
+                        ) : (
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-xs">
+                                    <thead class="bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 uppercase text-[10px]">
+                                        <tr>
+                                            <th class="p-3 rounded-l-xl">Produk</th>
+                                            <th class="p-3">Kategori</th>
+                                            <th class="p-3">Harga</th>
+                                            <th class="p-3">Stok</th>
+                                            <th class="p-3 rounded-r-xl text-center">Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                                        {products.map(p => (
+                                            <tr key={p.id} class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                                                <td class="p-3 flex items-center gap-3">
+                                                    <img 
+                                                        src={p.image || 'https://placehold.co/100x100'} 
+                                                        alt={p.name} 
+                                                        class="w-8 h-8 rounded-lg object-cover bg-slate-200"
+                                                        onError={(e) => { e.target.src = 'https://placehold.co/100x100'; }}
+                                                    />
+                                                    <span class="font-bold text-slate-800 dark:text-white">{p.name}</span>
+                                                </td>
+                                                <td class="p-3 text-slate-500 dark:text-slate-400">{p.category || 'Umum'}</td>
+                                                <td class="p-3 font-semibold text-sky-600 dark:text-sky-400">{formatRupiah(p.price)}</td>
+                                                <td class="p-3">
+                                                    <span class={`px-2 py-0.5 rounded-md font-bold ${p.stock < 10 ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200'}`}>
+                                                        {p.stock}
+                                                    </span>
+                                                </td>
+                                                <td class="p-3 text-center space-x-2">
+                                                    <button onClick={() => handleEdit(p)} class="p-1.5 text-sky-600 hover:bg-sky-50 rounded-lg">
+                                                        <i class="fa-solid fa-pen-to-square"></i>
+                                                    </button>
+                                                    <button onClick={() => handleDelete(p.id)} class="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg">
+                                                        <i class="fa-solid fa-trash"></i>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        function RiwayatTab({ user, storeSettings, onOpenReceipt, setPermissionError }) {
+            const [transactions, setTransactions] = useState([]);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                if (!user) return;
+                const unsubscribe = db.collection('users').doc(user.uid).collection('transactions')
+                    .onSnapshot((snapshot) => {
+                        const items = [];
+                        snapshot.forEach((doc) => {
+                            items.push({ id: doc.id, ...doc.data() });
+                        });
+                        // Sort by date desc
+                        items.sort((a, b) => (b.date?.seconds || 0) - (a.date?.seconds || 0));
+                        setTransactions(items);
+                        setLoading(false);
+                    }, (err) => {
+                        console.error("Fetch history error:", err);
+                        if (err.code === 'permission-denied' || err.message.includes('permissions')) {
+                            if (setPermissionError) setPermissionError(true);
+                        }
+                        setLoading(false);
+                    });
+                return () => unsubscribe();
+            }, [user]);
+
+            const totalGrandRevenue = transactions.reduce((acc, curr) => acc + (curr.grandTotal || 0), 0);
+
+            // Export to PDF using jsPDF AutoTable
+            const exportPDF = () => {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF();
+
+                doc.setFontSize(16);
+                doc.text(`Laporan Penjualan - ${storeSettings.name}`, 14, 15);
+                doc.setFontSize(10);
+                doc.text(`Dicetak pada: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+                const tableData = transactions.map((t, idx) => [
+                    idx + 1,
+                    t.transactionNo || t.id,
+                    t.dateFormatted || '-',
+                    t.items ? t.items.map(i => `${i.name} (${i.qty})`).join(', ') : '-',
+                    formatRupiah(t.grandTotal)
+                ]);
+
+                doc.autoTable({
+                    startY: 28,
+                    head: [['No', 'ID Transaksi', 'Tanggal', 'Items', 'Total']],
+                    body: tableData,
+                    foot: [['', '', '', 'TOTAL PENJUALAN', formatRupiah(totalGrandRevenue)]]
+                });
+
+                doc.save(`Laporan-Penjualan-${Date.now()}.pdf`);
+            };
+
+            return (
+                <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 shadow-sm space-y-4">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                        <div>
+                            <h2 class="font-bold text-slate-800 dark:text-white">Riwayat Penjualan</h2>
+                            <p class="text-xs text-slate-500">Semua catatan transaksi toko Anda.</p>
+                        </div>
+                        <button 
+                            onClick={exportPDF}
+                            disabled={transactions.length === 0}
+                            class="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow transition flex items-center gap-2 disabled:opacity-50"
+                        >
+                            <i class="fa-solid fa-file-pdf"></i> Unduh Semua Riwayat PDF
+                        </button>
+                    </div>
+
+                    {loading ? (
+                        <div class="text-center py-8 text-slate-400">Memuat riwayat...</div>
+                    ) : (
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-xs">
+                                <thead class="bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 uppercase text-[10px]">
+                                    <tr>
+                                        <th class="p-3 rounded-l-xl">No. Transaksi</th>
+                                        <th class="p-3">Waktu</th>
+                                        <th class="p-3">Daftar Barang</th>
+                                        <th class="p-3">Total Belanja</th>
+                                        <th class="p-3 rounded-r-xl text-center">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                                    {transactions.map(t => (
+                                        <tr key={t.id} class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                                            <td class="p-3 font-mono font-bold text-sky-600 dark:text-sky-400">{t.transactionNo || t.id}</td>
+                                            <td class="p-3 text-slate-500 dark:text-slate-400">{t.dateFormatted || 'Baru saja'}</td>
+                                            <td class="p-3 max-w-xs truncate text-slate-700 dark:text-slate-300">
+                                                {t.items ? t.items.map(i => `${i.name} (x${i.qty})`).join(', ') : '-'}
+                                            </td>
+                                            <td class="p-3 font-bold text-slate-800 dark:text-white">{formatRupiah(t.grandTotal)}</td>
+                                            <td class="p-3 text-center">
+                                                <button 
+                                                    onClick={() => onOpenReceipt(t)}
+                                                    class="px-2.5 py-1 bg-slate-100 dark:bg-slate-700 hover:bg-sky-600 hover:text-white text-slate-700 dark:text-slate-200 rounded-lg text-[11px] font-semibold transition"
+                                                >
+                                                    <i class="fa-solid fa-print mr-1"></i> Struk
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {/* Total Grand Revenue Footer Banner */}
+                    <div class="p-4 bg-sky-50 dark:bg-sky-900/30 rounded-xl flex justify-between items-center border border-sky-100 dark:border-sky-800/50">
+                        <span class="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase">TOTAL KESELURUHAN PENDAPATAN</span>
+                        <span class="text-lg font-black text-sky-600 dark:text-sky-400">{formatRupiah(totalGrandRevenue)}</span>
+                    </div>
+                </div>
+            );
+        }
+
+        function RekapTab({ user, setPermissionError }) {
+            const [transactions, setTransactions] = useState([]);
+            const canvasRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (!user) return;
+                const unsubscribe = db.collection('users').doc(user.uid).collection('transactions')
+                    .onSnapshot((snapshot) => {
+                        const items = [];
+                        snapshot.forEach((doc) => {
+                            items.push({ id: doc.id, ...doc.data() });
+                        });
+                        setTransactions(items);
+                    }, (err) => {
+                        console.error("Fetch rekap error:", err);
+                        if (err.code === 'permission-denied' || err.message.includes('permissions')) {
+                            if (setPermissionError) setPermissionError(true);
+                        }
+                    });
+                return () => unsubscribe();
+            }, [user]);
+
+            // Calculate Period Totals
+            const now = new Date();
+            const todayStr = now.toDateString();
+
+            let todayTotal = 0;
+            let weekTotal = 0;
+            let monthTotal = 0;
+
+            const daysMap = {};
+            // Initialize last 7 days map
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date();
+                d.setDate(d.getDate() - i);
+                const key = d.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' });
+                daysMap[key] = 0;
+            }
+
+            transactions.forEach(t => {
+                const tDate = t.date?.toDate ? t.date.toDate() : new Date();
+                const amount = t.grandTotal || 0;
+
+                // Today
+                if (tDate.toDateString() === todayStr) {
+                    todayTotal += amount;
+                }
+
+                // Week (last 7 days)
+                const diffTime = Math.abs(now - tDate);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                if (diffDays <= 7) {
+                    weekTotal += amount;
+                }
+
+                // Month
+                if (tDate.getMonth() === now.getMonth() && tDate.getFullYear() === now.getFullYear()) {
+                    monthTotal += amount;
+                }
+
+                // Chart Days Mapping
+                const dayKey = tDate.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' });
+                if (daysMap[dayKey] !== undefined) {
+                    daysMap[dayKey] += amount;
+                }
+            });
+
+            // Render Chart.js
+            useEffect(() => {
+                if (!canvasRef.current) return;
+
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                const ctx = canvasRef.current.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: Object.keys(daysMap),
+                        datasets: [{
+                            label: 'Pendapatan (Rp)',
+                            data: Object.values(daysMap),
+                            backgroundColor: '#0ea5e9',
+                            borderRadius: 8,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    callback: (val) => 'Rp ' + val.toLocaleString('id-ID')
+                                }
+                            }
+                        }
+                    }
+                });
+
+                return () => {
+                    if (chartInstance.current) chartInstance.current.destroy();
+                };
+            }, [transactions]);
+
+            return (
+                <div class="space-y-6">
+                    {/* Top Stat Cards */}
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 rounded-2xl shadow-sm">
+                            <span class="text-xs text-slate-500 font-semibold uppercase">Hari Ini</span>
+                            <h3 class="text-2xl font-black text-sky-600 dark:text-sky-400 mt-1">{formatRupiah(todayTotal)}</h3>
+                        </div>
+
+                        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 rounded-2xl shadow-sm">
+                            <span class="text-xs text-slate-500 font-semibold uppercase">Minggu Ini</span>
+                            <h3 class="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{formatRupiah(weekTotal)}</h3>
+                        </div>
+
+                        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 rounded-2xl shadow-sm">
+                            <span class="text-xs text-slate-500 font-semibold uppercase">Bulan Ini</span>
+                            <h3 class="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">{formatRupiah(monthTotal)}</h3>
+                        </div>
+                    </div>
+
+                    {/* Chart Container */}
+                    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 rounded-2xl shadow-sm">
+                        <h3 class="font-bold text-slate-800 dark:text-white mb-4">Grafik Penjualan 7 Hari Terakhir</h3>
+                        <div class="h-64">
+                            <canvas ref={canvasRef}></canvas>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function PengaturanTab({ user, storeSettings, setStoreSettings, darkMode, setDarkMode, setPermissionError }) {
+            const [name, setName] = useState(storeSettings.name || '');
+            const [address, setAddress] = useState(storeSettings.address || '');
+            const [phone, setPhone] = useState(storeSettings.phone || '');
+            const [savedStatus, setSavedStatus] = useState(false);
+
+            const handleSave = async (e) => {
+                e.preventDefault();
+                try {
+                    const newSettings = { name, address, phone };
+                    await db.collection('users').doc(user.uid).collection('settings').doc('store').set(newSettings);
+                    setStoreSettings(newSettings);
+                    setSavedStatus(true);
+                    setTimeout(() => setSavedStatus(false), 3000);
+                } catch (err) {
+                    console.error("Save settings error:", err);
+                    alert("Gagal menyimpan pengaturan: " + err.message);
+                }
+            };
+
+            return (
+                <div class="max-w-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 shadow-sm space-y-6">
+                    <div>
+                        <h2 class="font-bold text-slate-800 dark:text-white text-lg">Pengaturan Toko</h2>
+                        <p class="text-xs text-slate-500">Informasi ini akan dicetak pada Struk Belanja pelanggan.</p>
+                    </div>
+
+                    {savedStatus && (
+                        <div class="p-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs rounded-xl flex items-center gap-2">
+                            <i class="fa-solid fa-circle-check"></i> Pengaturan berhasil disimpan!
+                        </div>
+                    )}
+
+                    <form onSubmit={handleSave} class="space-y-4 text-xs">
+                        <div>
+                            <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">Email Pengguna (Read Only)</label>
+                            <input 
+                                type="text" 
+                                disabled 
+                                value={user.email} 
+                                class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-500 cursor-not-allowed"
+                            />
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">Nama Toko</label>
+                            <input 
+                                type="text" 
+                                required 
+                                value={name} 
+                                onChange={(e) => setName(e.target.value)} 
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                            />
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">Alamat Toko</label>
+                            <textarea 
+                                rows="2" 
+                                required 
+                                value={address} 
+                                onChange={(e) => setAddress(e.target.value)} 
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                            ></textarea>
+                        </div>
+
+                        <div>
+                            <label class="block font-semibold text-slate-600 dark:text-slate-300 mb-1">No. Telepon / WhatsApp</label>
+                            <input 
+                                type="text" 
+                                required 
+                                value={phone} 
+                                onChange={(e) => setPhone(e.target.value)} 
+                                class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-sky-500"
+                            />
+                        </div>
+
+                        <div class="pt-2 border-t border-slate-100 dark:border-slate-700 flex justify-between items-center">
+                            <span class="font-semibold text-slate-700 dark:text-slate-300">Tampilan Tema</span>
+                            <button 
+                                type="button"
+                                onClick={() => setDarkMode(!darkMode)}
+                                class="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 rounded-xl font-semibold text-slate-700 dark:text-slate-200"
+                            >
+                                {darkMode ? '🌙 Mode Gelap' : '☀️ Mode Terang'}
+                            </button>
+                        </div>
+
+                        <button 
+                            type="submit" 
+                            class="w-full py-3 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow transition"
+                        >
+                            Simpan Pengaturan
+                        </button>
+                    </form>
+                </div>
+            );
+        }
+
+        function StrukModal({ transaction, storeSettings, onClose }) {
+            const handlePrint = () => {
+                window.print();
+            };
+
+            return (
+                <div class="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div class="bg-white text-slate-900 rounded-2xl max-w-sm w-full p-6 shadow-2xl relative overflow-hidden flex flex-col max-h-[90vh]">
+                        {/* Action Buttons Top Header */}
+                        <div class="flex justify-between items-center mb-4 pb-2 border-b">
+                            <h3 class="font-bold text-sm">Pratinjau Struk Thermal</h3>
+                            <button onClick={onClose} class="text-slate-400 hover:text-slate-700 text-lg">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+
+                        {/* Thermal Print Content Container */}
+                        <div class="overflow-y-auto flex-1 pr-1">
+                            <div id="thermal-print-area" class="thermal-font p-2 border border-dashed border-slate-300 bg-white text-black text-xs leading-tight">
+                                <div class="text-center font-bold text-sm uppercase">{storeSettings.name}</div>
+                                <div class="text-center text-[10px]">{storeSettings.address}</div>
+                                <div class="text-center text-[10px] mb-2">Telp: {storeSettings.phone}</div>
+
+                                <div class="border-b border-dashed border-black my-1"></div>
+
+                                <div class="flex justify-between text-[10px]">
+                                    <span>No: {transaction.transactionNo || transaction.id}</span>
+                                </div>
+                                <div class="text-[10px] mb-1">
+                                    Tgl: {transaction.dateFormatted || new Date().toLocaleString('id-ID')}
+                                </div>
+
+                                <div class="border-b border-dashed border-black my-1"></div>
+
+                                <div class="space-y-1 my-2">
+                                    {transaction.items && transaction.items.map((item, idx) => (
+                                        <div key={idx}>
+                                            <div class="font-bold">{item.name}</div>
+                                            <div class="flex justify-between text-[11px]">
+                                                <span>{item.qty} x {item.price.toLocaleString('id-ID')}</span>
+                                                <span>{(item.qty * item.price).toLocaleString('id-ID')}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div class="border-b border-dashed border-black my-1"></div>
+
+                                <div class="space-y-0.5 text-[11px] pt-1">
+                                    <div class="flex justify-between">
+                                        <span>Subtotal:</span>
+                                        <span>Rp {transaction.subtotal?.toLocaleString('id-ID')}</span>
+                                    </div>
+                                    {transaction.tax > 0 && (
+                                        <div class="flex justify-between">
+                                            <span>PPN (11%):</span>
+                                            <span>Rp {transaction.tax?.toLocaleString('id-ID')}</span>
+                                        </div>
+                                    )}
+                                    <div class="flex justify-between font-bold text-xs pt-1 border-t border-black">
+                                        <span>TOTAL:</span>
+                                        <span>Rp {transaction.grandTotal?.toLocaleString('id-ID')}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Tunai:</span>
+                                        <span>Rp {transaction.cash?.toLocaleString('id-ID')}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span>Kembali:</span>
+                                        <span>Rp {transaction.change?.toLocaleString('id-ID')}</span>
+                                    </div>
+                                </div>
+
+                                <div class="border-b border-dashed border-black my-2"></div>
+                                <div class="text-center text-[10px] mt-2 italic">
+                                    -- Terima Kasih --<br/>
+                                    POSKASIR.XYZ
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Bottom Actions */}
+                        <div class="mt-4 pt-3 border-t flex gap-2">
+                            <button 
+                                onClick={handlePrint}
+                                class="flex-1 py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow"
+                            >
+                                <i class="fa-solid fa-print"></i> Cetak Struk (80mm)
+                            </button>
+                            <button 
+                                onClick={onClose}
+                                class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs"
+                            >
+                                Tutup
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
